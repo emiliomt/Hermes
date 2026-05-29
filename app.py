@@ -1,5 +1,5 @@
 import streamlit as st
-from anthropic import Anthropic
+from openai import OpenAI
 import io
 import re
 from reportlab.lib.pagesizes import A4
@@ -13,7 +13,7 @@ from reportlab.lib.enums import TA_LEFT
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-MODEL = "claude-sonnet-4-20250514"
+MODEL = "gpt-4o"
 
 PRIMER_SYSTEM = """You are a senior equity research analyst with 20+ years covering businesses across every sector. \
 When given a company description you produce a concise but substantive briefing primer for a junior analyst \
@@ -181,45 +181,42 @@ def init_state():
             st.session_state[k] = v
 
 
-def stream_primer(client: Anthropic, description: str) -> str:
+def _stream(client: OpenAI, messages: list[dict], max_tokens: int) -> str:
     placeholder = st.empty()
     collected: list[str] = []
-    with client.messages.stream(
+    stream = client.chat.completions.create(
         model=MODEL,
-        max_tokens=1800,
-        system=PRIMER_SYSTEM,
-        messages=[{"role": "user", "content": description}],
-    ) as stream:
-        for chunk in stream.text_stream:
-            collected.append(chunk)
+        messages=messages,
+        max_tokens=max_tokens,
+        stream=True,
+    )
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            collected.append(delta)
             placeholder.markdown("".join(collected) + "▌")
     full_text = "".join(collected)
     placeholder.markdown(full_text)
     return full_text
 
 
-def stream_chat(client: Anthropic, user_msg: str) -> str:
+def stream_primer(client: OpenAI, description: str) -> str:
+    messages = [
+        {"role": "system", "content": PRIMER_SYSTEM},
+        {"role": "user", "content": description},
+    ]
+    return _stream(client, messages, max_tokens=1800)
+
+
+def stream_chat(client: OpenAI, user_msg: str) -> str:
     system = CHAT_SYSTEM_TEMPLATE.format(primer=st.session_state.primer)
-    history = [
+    history = [{"role": "system", "content": system}]
+    history += [
         {"role": m["role"], "content": m["content"]}
         for m in st.session_state.messages
     ]
     history.append({"role": "user", "content": user_msg})
-
-    placeholder = st.empty()
-    collected: list[str] = []
-    with client.messages.stream(
-        model=MODEL,
-        max_tokens=1024,
-        system=system,
-        messages=history,
-    ) as stream:
-        for chunk in stream.text_stream:
-            collected.append(chunk)
-            placeholder.markdown("".join(collected) + "▌")
-    full_text = "".join(collected)
-    placeholder.markdown(full_text)
-    return full_text
+    return _stream(client, history, max_tokens=1024)
 
 
 def main():
@@ -230,7 +227,7 @@ def main():
     )
 
     init_state()
-    client = Anthropic()
+    client = OpenAI()
 
     # ── Header ────────────────────────────────────────────────────────────────
     st.title("Business Model Tutor")
